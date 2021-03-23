@@ -81,7 +81,6 @@ def _tcr() -> str:
 
 tcr = _tcr()
 
-
 """
 AttrIndx [0] = Normal Inner/Outer Write-Back RAWA
 AttrIndx [1] = Device-nGnRnE
@@ -89,10 +88,11 @@ AttrIndx [1] = Device-nGnRnE
 mair = hex(0x00FF)
 log.debug(f"mair_el{args.el}={mair}")
 
-
-ttbr = hex(args.ttb)
+ttbr = args.ttb
 log.debug(f"ttbr0_el{args.el}={ttbr}")
 
+if (args.ttbr1 != 0) & (args.el != 1):
+   log.error(f"TTBR1 only in EL1")
 
 def _sctlr() -> str:
     """
@@ -106,7 +106,7 @@ def _sctlr() -> str:
     reg.field( 0,  0, "m", 1)    # MMU enabled
     reg.field( 2,  2, "c", 1)    # D-side access cacheability controlled by pgtables
     reg.field(12, 12, "i", 1),   # I-side access cacheability controlled by pgtables
-    
+
 
     return hex(reg.value())
 
@@ -140,7 +140,7 @@ def _template_block_page( memory_type:mmap.MEMORY_TYPE, is_page:bool ):
             pte.field(53, 53, "pxn", 1)
         else:
             pte.field(54, 54, "xn", 1)
-    
+
     else:
         if args.el == 1:
             pte.field(53, 53, "pxn", 0)

@@ -36,7 +36,7 @@ class Table:
                         base virtual address mapped by entry [0] in this table
 
         """
-        self.addr = args.ttb + len(Table._allocated) * args.tg
+        self.addr = len(Table._allocated) * args.tg
         self.level = level
         self.chunk = args.tg << ((3 - self.level) * mmu.table_idx_bits)
         self.va_base = va_base
@@ -161,7 +161,7 @@ class Table:
         Recursively crawl this table to generate a pretty-printable string.
         """
         margin = " " * (self.level - mmu.start_level + 1) * 8
-        string = f"{margin}level {self.level} table @ {hex(self.addr)}\n"
+        string = f"{margin}level {self.level} table @ {args.ttb} + {hex(self.addr)}\n"
         for k in sorted(list(self.entries.keys())):
             entry = self.entries[k]
             if type(entry) is Table:
@@ -194,7 +194,7 @@ class Table:
         """
         string  = f"This memory map requires a total of {len(cls._allocated)} translation tables.\n"
         string += f"Each table occupies {args.tg_str} of memory ({hex(args.tg)} bytes).\n"
-        string += f"The buffer pointed to by {hex(args.ttb)} must therefore be {len(cls._allocated)}x {args.tg_str} = {hex(args.tg * len(cls._allocated))} bytes long."
+        string += f"The buffer pointed to by {args.ttb} must therefore be {len(cls._allocated)}x {args.tg_str} = {hex(args.tg * len(cls._allocated))} bytes long."
         return string
 
 

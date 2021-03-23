@@ -11,7 +11,6 @@ so this code only runs once regardless of how many times it is later imported.
 # Standard Python deps
 import argparse
 
-
 _parser = argparse.ArgumentParser()
 
 _parser.add_argument(
@@ -31,9 +30,15 @@ _parser.add_argument(
 )
 
 _parser.add_argument(
+    "-ttbr1",
+    help="Use TTBR1 instead of TTBR0",
+    action="count"
+)
+
+_parser.add_argument(
     "-ttb",
-    help="desired translation table base address",
-    type=lambda v: int(v, 0),
+    help="desired translation table base address as symbol!",
+    type=str,
     required=True,
 )
 
@@ -77,5 +82,6 @@ el = _args.el
 tg_str = _args.tg
 tg = {"4K":4*1024, "16K":16*1024, "64K":64*1024}[_args.tg]
 tsz = _args.tsz
+ttbr1 = _args.ttbr1
 verbose = _args.v >= 1
 debug = _args.v >= 2
