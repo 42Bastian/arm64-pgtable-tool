@@ -226,7 +226,8 @@ _tmp =f"""/*
     ret                                 // done!
     ENDFUNC pagetable_init{args.label}
 
-    .section noinit.mmu
+    .section noinit.mmu,"aw",@nobits
+    .align 12
 {args.ttb}: .space {hex(args.tg * len(table.Table._allocated))}
 """
 
@@ -259,7 +260,7 @@ mmu_on = f"""
     MOV64   x1, {mmu.tcr}              // program tcr on this CPU
     msr     tcr_el{args.el}, x1
     isb
-    msr     x2, tcr_el{args.el}         // verify CPU supports desired config
+    mrs     x2, tcr_el{args.el}         // verify CPU supports desired config
     cmp     x2, x1
     b.ne    .
     MOV64   x1, {mmu.sctlr}            // program sctlr on this CPU
