@@ -8,7 +8,7 @@ This version has been changed a lot for my personal preferences. For the origina
 
 Tool for automatically generating MMU and translation table setup code, whether to drag and drop into your own bare metal arm64 projects or to assist you in your own learning.
 
-For more information see [my blog post](https://ashw.io/blog/arm64-pgtable-tool).
+For more information see [the original blog post](https://ashw.io/blog/arm64-pgtable-tool).
 
 ## Prerequisites
 
