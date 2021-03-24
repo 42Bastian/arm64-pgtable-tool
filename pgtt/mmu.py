@@ -1,5 +1,6 @@
 """
 Copyright (c) 2019 Ash Wilding. All rights reserved.
+          (c) 2021 42Bastian Schick
 
 SPDX-License-Identifier: MIT
 """
@@ -82,10 +83,13 @@ def _tcr() -> str:
 tcr = _tcr()
 
 """
-AttrIndx [0] = Normal Inner/Outer Write-Back RAWA
+
+AttrIndx [0] = Normal Inner/Outer Write-Back RA/WA
 AttrIndx [1] = Device-nGnRnE
+AttrIndx [2] = Normal, Inner/Outer Non-Cacheable
+AttrIndx [3] = Normal, Inner/Outer Write-Thru RA/WA
 """
-mair = hex(0x00FF)
+mair = hex(0xBB44FF00)
 log.debug(f"mair_el{args.el}={mair}")
 
 ttbr = args.ttb
@@ -113,7 +117,7 @@ def _sctlr() -> str:
 sctlr = _sctlr()
 
 
-def _template_block_page( memory_type:mmap.MEMORY_TYPE, is_page:bool ):
+def _template_block_page ( memory_type:mmap.MEMORY_TYPE, is_page:bool ):
     """
     Translation table entry fields common across all exception levels.
     """
@@ -125,9 +129,15 @@ def _template_block_page( memory_type:mmap.MEMORY_TYPE, is_page:bool ):
     elif memory_type == mmap.MEMORY_TYPE.rw_data:
         pte.field( 4,  2, "attrindx", 0)
         pte.field( 7,  6, "AP", 0)
-    else:
+    elif memory_type == mmap.MEMORY_TYPE.no_cache:
+        pte.field( 4,  2, "attrindx", 2)
+        pte.field( 7,  6, "AP", 0)
+    elif memory_type == mmap.MEMORY_TYPE.code:
         pte.field( 4,  2, "attrindx", 0)
         pte.field( 7,  6, "AP", 2)
+    else:
+        pte.field( 4,  2, "attrindx", 3)
+        pte.field( 7,  6, "AP", 0)
 
     pte.field( 9,  8, "sh", 3)  # Inner Shareable, ignored by Device memory
     pte.field(10, 10, "af", 1)  # Disable Access Flag faults
@@ -135,7 +145,7 @@ def _template_block_page( memory_type:mmap.MEMORY_TYPE, is_page:bool ):
     """
     Exception level specific differences.
     """
-    if memory_type == mmap.MEMORY_TYPE.device or memory_type == mmap.MEMORY_TYPE.rw_data:
+    if memory_type != mmap.MEMORY_TYPE.code:
         if args.el == 1:
             pte.field(53, 53, "pxn", 1)
         else:

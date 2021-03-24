@@ -1,5 +1,6 @@
 """
 Copyright (c) 2019 Ash Wilding. All rights reserved.
+          (c) 2021 42Bastian Schick
 
 SPDX-License-Identifier: MIT
 """

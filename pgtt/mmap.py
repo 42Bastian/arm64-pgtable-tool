@@ -1,5 +1,6 @@
 """
 Copyright (c) 2019 Ash Wilding. All rights reserved.
+          (c) 2021 42Bastian Schick
 
 SPDX-License-Identifier: MIT
 """
@@ -21,13 +22,16 @@ from intervaltree import Interval, IntervalTree
 class MEMORY_TYPE(Enum):
         device = 0,
         rw_data = 1,
-        code = 2
+        code = 2,
+        no_cache = 3,
+        rw_data_wb = 4
+
 @dataclass
 class Region:
     """
     Class representing a single region in the memory map.
     """
-    
+
     lineno: int                    # line number in source memory map file
     label: str                     # name/label e.g. DRAM, GIC, UART, ...
     addr: int                      # base address
@@ -75,6 +79,12 @@ class MemoryMap():
                     line = line.strip()
                     log.debug()
                     log.debug(f"parsing line {lineno}: {line}")
+
+                    if len(line) == 0:
+                        continue
+
+                    if line[0] == '#':
+                        continue
 
                     def abort_bad_region( msg:str, variable ) -> None:
                         """
@@ -130,7 +140,7 @@ class MemoryMap():
                         addr = addr - misalignment
                         length = length + args.tg
                         log.debug("corrected misalignment, new addr={}, length={}".format(hex(addr), hex(length)))
-                    
+
                     overflow = length % args.tg
                     if overflow:
                         length = length + args.tg - overflow
@@ -140,14 +150,17 @@ class MemoryMap():
                     Parse region attributes.
                     """
                     log.debug(f"parsing attributes: {attrs}")
-                    if not attrs in ["RW_DATA", "DEVICE", "CODE"]:
+                    if not attrs in ["RW_DATA", "DEVICE", "CODE", "NO_CACHE" ]:
                         abort_bad_region("attributes", attrs)
                     if attrs == "DEVICE":
                         memory_type = MEMORY_TYPE.device
                     elif attrs == "RW_DATA":
                         memory_type = MEMORY_TYPE.rw_data
-                    else:
+                    elif attrs == "CODE":
                         memory_type = MEMORY_TYPE.code
+                    else:
+                        memory_type = MEMORY_TYPE.no_cache
+
                     log.debug(f"{memory_type=}")
 
                     """

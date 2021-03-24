@@ -1,5 +1,6 @@
 """
 Copyright (c) 2019 Ash Wilding. All rights reserved.
+          (c) 2021 42Bastian Schick
 
 SPDX-License-Identifier: MIT
 """
@@ -160,30 +161,78 @@ class Table:
         """
         Recursively crawl this table to generate a pretty-printable string.
         """
-        margin = " " * (self.level - mmu.start_level + 1) * 8
+        skip = 0
+        last_string = ""
+        last_label = ""
+
+        margin = " " * (self.level - mmu.start_level) * 4
         string = f"{margin}level {self.level} table @ {args.ttb} + {hex(self.addr)}\n"
         for k in sorted(list(self.entries.keys())):
             entry = self.entries[k]
+
             if type(entry) is Table:
+                if skip > 0:
+                    if skip > 1:
+                        string += '{}        ...\n'.format(margin)
+                    string += last_string
+
                 header = "{}[#{:>4}]".format(margin, k)
                 nested_table = str(entry)
                 hyphens = "-" * (len(nested_table.splitlines()[0]) - len(header))
                 string += f"{header}" + hyphens + f"\\\n{nested_table}"
+                skip = 0
+                last_string = ""
+                last_label = ""
             else:
                 if entry.memory_type == mmap.MEMORY_TYPE.rw_data:
                     memtype = "RW_Data"
                 elif entry.memory_type == mmap.MEMORY_TYPE.device:
                     memtype = "Device"
-                else:
+                elif entry.memory_type == mmap.MEMORY_TYPE.code:
                     memtype = "Code"
-                string += "{}[#{:>4}] 0x{:>012}-0x{:>012}, {}, {}\n".format(
-                    margin,
-                    k,
-                    hex(entry.addr)[2:],
-                    hex(entry.addr + entry.length - 1)[2:],
-                    memtype,
-                    entry.label
-                )
+                else:
+                    memtype = "No Cache"
+
+                if (last_label != entry.label):
+                    if skip > 0:
+                        if skip > 1:
+                            string += '{}        ...\n'.format(margin)
+                        string += last_string
+
+                    x = "{}[#{:>4}] 0x{:>012}-0x{:>012}, ".format(
+                        margin,
+                        k,
+                        hex(entry.addr)[2:],
+                        hex(entry.addr + entry.length - 1)[2:])
+
+                    offset = " " * (77-len(x)-26)
+                    string += x+"{}{:>8}, {:>16}\n".format(
+                        offset,
+                        memtype,
+                        entry.label)
+
+                    skip = 0;
+                    last_string = ""
+                    last_label = entry.label
+                else:
+                    skip += 1
+                    x = "{}[#{:>4}] 0x{:>012}-0x{:>012}, ".format(
+                        margin,
+                        k,
+                        hex(entry.addr)[2:],
+                        hex(entry.addr + entry.length - 1)[2:])
+
+                    offset = " " * (77-len(x)-26)
+                    last_string = x+"{}{:>8}, {:>16}\n".format(
+                        offset,
+                        memtype,
+                        entry.label)
+
+        if skip > 0:
+            if skip > 1:
+                string += '{}        ...\n'.format(margin)
+            string += last_string
+
         return string
 
 
@@ -194,7 +243,7 @@ class Table:
         """
         string  = f"This memory map requires a total of {len(cls._allocated)} translation tables.\n"
         string += f"Each table occupies {args.tg_str} of memory ({hex(args.tg)} bytes).\n"
-        string += f"The buffer pointed to by {args.ttb} must therefore be {len(cls._allocated)}x {args.tg_str} = {hex(args.tg * len(cls._allocated))} bytes long."
+        string += f"The buffer pointed to by '{args.ttb}' is therefore {len(cls._allocated)}x{args.tg_str} = {hex(args.tg * len(cls._allocated))} bytes long."
         return string
 
 

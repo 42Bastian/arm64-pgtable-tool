@@ -1,5 +1,6 @@
 """
 Copyright (c) 2019 Ash Wilding. All rights reserved.
+          (c) 2021 42Bastian Schick
 
 SPDX-License-Identifier: MIT
 """
@@ -26,10 +27,10 @@ def _mk_table( n:int, t:table.Table ) -> str:
                     translation table being programmed
     """
     return f"""
-program_table_{n}:
-    MOV64   x8, {hex(t.addr)}          // base address of this table
-    ADD     x8, x8, x6                 // add global base
-    MOV64   x9, {hex(t.chunk)}         // chunk size"""
+/* program_table_{n} */
+    MOV64   x21, {hex(t.addr)}          // base address of this table
+    add     x21, x21, x20          // add global base
+    MOV64   x22, {hex(t.chunk)}         // chunk size"""
 
 def _mk_blocks( n:int, t:table.Table, idx:int, r:Region ) -> str:
     """
@@ -54,29 +55,40 @@ def _mk_blocks( n:int, t:table.Table, idx:int, r:Region ) -> str:
         template_reg = "x2" if t.level < 3 else "x3"
     elif r.memory_type == mmap.MEMORY_TYPE.rw_data:
         template_reg = "x4" if t.level < 3 else "x5"
+    elif r.memory_type == mmap.MEMORY_TYPE.no_cache:
+        template_reg = "x6" if t.level < 3 else "x7"
     else:
-        template_reg = "x20" if t.level < 3 else "x21"
+        template_reg = "x8" if t.level < 3 else "x9"
 
-    return f"""program_table_{n}_entry_{idx}{f'_to_{idx + r.num_contig - 1}' if r.num_contig > 1 else ''}:
-
+    if r.num_contig > 1:
+        return f"""
+/* program_table_{n}_entry_{idx}_to_{idx + r.num_contig - 1} */
+/* {r.label} */
     MOV64   x10, {idx}                 // idx
-    MOV64   x11, {r.num_contig}        // number of contiguous entries
+    MOV64   x11, {r.num_contig}         // number of contiguous entries
     MOV64   x12, {hex(r.addr)}         // output address of entry[idx]
 1:
-    ORR     x12, x12, {template_reg}    // merge output address with template
-    STR     X12, [x8, x10, lsl #3]      // write entry into table
-    ADD     x10, x10, #1                // prepare for next entry idx+1
-    ADD     x12, x12, x9                // add chunk to address
-    SUBS    x11, x11, #1                // loop as required
-    B.NE    1b
+    orr     x12, x12, {template_reg}    // merge output address with template
+    str     X12, [x21, x10, lsl #3]      // write entry into table
+    add     x10, x10, #1                // prepare for next entry
+    add     x12, x12, x22                // add chunk to address
+    subs    x11, x11, #1                // loop as required
+    b.ne    1b
+"""
+    else:
+        return f"""
+/* program_table_{n}_entry_{idx} */
+/* {r.label} */
+    MOV64   x10, {idx}                 // idx
+    MOV64   x12, {hex(r.addr)}         // output address of entry[idx]
+    orr     x12, x12, {template_reg}    // merge output address with template
+    str     X12, [x21, x10, lsl #3]      // write entry into table
 """
 
 
 
 def _mk_next_level_table( n:int, idx:int, next_t:table.Table ) -> str:
     """
-    Generate assembly to program a pointer to a next level table.
-
     args
     ====
 
@@ -90,13 +102,12 @@ def _mk_next_level_table( n:int, idx:int, next_t:table.Table ) -> str:
                     the next level translation table
     """
     return f"""
-program_table_{n}_entry_{idx}:
+/* program_table_{n}_entry_{idx} */
     MOV64   x10, {idx}                 // idx
     MOV64   x11, {hex(next_t.addr)}    // next-level table address
-    ADD     x11, x11, x6               // add base address
-    ORR     x11, x11, #0x3             // next-level table descriptor
-    STR     x11, [x8, x10, lsl #3]     // write entry into table"""
-
+    add     x11, x11, x20              // add base address
+    orr     x11, x11, #0x3             // next-level table descriptor
+    str     x11, [x21, x10, lsl #3]     // write entry into table"""
 
 
 def _mk_asm() -> str:
@@ -128,7 +139,9 @@ if args.ttbr1:
 _newline = "\n"
 _tmp =f"""/*
  * This file was automatically generated using arm64-pgtable-tool.
- * See: https://github.com/ashwio/arm64-pgtable-tool
+ * See: https://github.com/42Bastian Schick/arm64-pgtable-tool
+ * Forked from: https://github.com/ashwio/arm64-pgtable-tool
+ *
  *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
  * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
@@ -151,101 +164,109 @@ _tmp =f"""/*
  *      -tsz {args.tsz}
  *
 {_newline.join([f' * {ln}' for ln in table.Table.usage().splitlines()])}
- * It is the programmer's responsibility to guarantee this.
  *
  * The programmer must also ensure that the virtual memory region containing the
  * translation tables is itself marked as NORMAL in the memory map file.
  */
+
+     /* some handy macros */
+    .macro  FUNC64 name
+    .section .text.\\name,"ax"
+    .type   \\name,%function
+    .globl  \\name
+\\name:
+    .endm
+
+    .macro  ENDFUNC name
+    .align  3
+    .pool
+    .globl  \\name\\()_end
+\\name\\()_end:
+    .size   \\name,.-\\name
+    .endm
+
     .macro  MOV64 reg,value
     movz    \\reg,#\\value & 0xffff
     .if \\value > 0xffff && ((\\value>>16) & 0xffff) != 0
     movk    \\reg,#(\\value>>16) & 0xffff,lsl #16
     .endif
-    .if  \\value > 0xffffffff && ((\\value>>32) & 0xffff) != 0
+    .if \\value > 0xffffffff && ((\\value>>32) & 0xffff) != 0
     movk    \\reg,#(\\value>>32) & 0xffff,lsl #32
     .endif
-    .if  \\value > 0xffffffffffff && ((\\value>>48) & 0xffff) != 0
+    .if \\value > 0xffffffffffff && ((\\value>>48) & 0xffff) != 0
     movk    \\reg,#(\\value>>48) & 0xffff,lsl #48
     .endif
     .endm
 
-    .section .data.mmu
-    .balign 2
-
-    mmu_lock: .4byte 0                  // lock to ensure only 1 CPU runs init
-#define LOCKED 1
-
-    mmu_init: .4byte 0                  // whether init has been run
-#define INITIALISED 1
-
-    .section .text.mmu_on
-    .balign 2
-    .global mmu_on
-    .type mmu_on, @function
-
-mmu_on:
-
-    ADRP    x0, mmu_lock                // get 4KB page containing mmu_lock
-    ADD     x0, x0, :lo12:mmu_lock      // restore low 12 bits lost by ADRP
-    MOV     w1, #LOCKED
-    SEVL                                // first pass won't sleep
-1:
-    WFE                                 // sleep on retry
-    LDAXR   w2, [x0]                    // read mmu_lock
-    CBNZ    w2, 1b                      // not available, go back to sleep
-    STXR    w3, w1, [x0]                // try to acquire mmu_lock
-    CBNZ    w3, 1b                      // failed, go back to sleep
-
-    ADRP    x6, {args.ttb}             // address of first table
-
-check_already_initialised:
-    ADRP    x1, mmu_init                // get 4KB page containing mmu_init
-    LDR     w2, [x1,#:lo12:mmu_init]    // read mmu_init
-    CBNZ    w2, end                     // init already done, skip to the end
-
-zero_out_tables:
-    mov     x2,x6
+/**
+ * Setup the page table.
+ * Not reentrant!
+ */
+    FUNC64 pagetable_init{args.label}
+    adrp    x20, {args.ttb}
+/* zero_out_tables */
+    mov     x2,x20
     MOV64   x3, {hex(args.tg * len(table.Table._allocated))}   // combined length of all tables
-    LSR     x3, x3, #5                  // number of required STP instructions
-    FMOV    d0, xzr                     // clear q0
+    fmov    d0, xzr                     // clear q0
 1:
-    STP     q0, q0, [x2], #32           // zero out 4 table entries at a time
-    SUBS    x3, x3, #1
-    B.NE    1b
+    stp     q0, q0, [x2], #32           // zero out 4 table entries at a time
+    subs    x3, x3, #32
+    b.ne    1b
 
-load_descriptor_templates:
-    MOV64     x2, {mmu.block_template(memory_type=mmap.MEMORY_TYPE.device)}       // Device block
-    MOV64     x3, {mmu.page_template(memory_type=mmap.MEMORY_TYPE.device)}        // Device page
-    MOV64     x4, {mmu.block_template(memory_type=mmap.MEMORY_TYPE.rw_data)}      // RW data block
-    MOV64     x5, {mmu.page_template(memory_type=mmap.MEMORY_TYPE.rw_data)}       // RW data page
-    MOV64    x20, {mmu.block_template(memory_type=mmap.MEMORY_TYPE.code)}      // code block
-    MOV64    x21, {mmu.page_template(memory_type=mmap.MEMORY_TYPE.code)}       // code page
+/* load_descriptor_templates */
+    MOV64    x2, {mmu.block_template(memory_type=mmap.MEMORY_TYPE.device)}   // Device block
+    MOV64    x3, {mmu.page_template(memory_type=mmap.MEMORY_TYPE.device)}    // Device page
+    MOV64    x4, {mmu.block_template(memory_type=mmap.MEMORY_TYPE.rw_data)}  // RW data block
+    MOV64    x5, {mmu.page_template(memory_type=mmap.MEMORY_TYPE.rw_data)}   // RW data page
+    MOV64    x6, {mmu.block_template(memory_type=mmap.MEMORY_TYPE.no_cache)} // no_cache block
+    MOV64    x7, {mmu.page_template(memory_type=mmap.MEMORY_TYPE.no_cache)}  // no_cache page
+    MOV64    x8, {mmu.block_template(memory_type=mmap.MEMORY_TYPE.code)}     // code block
+    MOV64    x9, {mmu.page_template(memory_type=mmap.MEMORY_TYPE.code)}      // code page
 {_mk_asm()}
+    ret                                 // done!
+    ENDFUNC pagetable_init{args.label}
 
-init_done:
-    MOV     w2, #INITIALISED
-    STR     w2, [x1]
+    .section noinit.mmu
+{args.ttb}: .space {hex(args.tg * len(table.Table._allocated))}
+"""
 
-end:
-    MSR     {ttbr}_el{args.el}, x6
+mmu_on = f"""
+/*
+ * Set translation table and enable MMU
+ */
+    FUNC64 mmu_on
+    adrp    x1, mmu_init               // get 4KB page containing mmu_init
+    ldr     w2, [x1,#:lo12:mmu_init]   // read mmu_init
+    cbz     w2, .                      // init not done, endless loop
+
+    adrp    x6, {args.ttb}             // address of first table
+    msr     {ttbr}_el{args.el}, x6
     .if {args.el} == 1
-    MSR     {ttbro}_el1,xzr
+    msr     {ttbro}_el1,xzr
     .endif
+    /**********************************************
+    * Set up memory attributes
+    * This equates to:
+    * 0 = b00000000 = Device-nGnRnE
+    * 1 = b11111111 = Normal, Inner/Outer WB/WA/RA
+    * 2 = b01000100 = Normal, Inner/Outer Non-Cacheable
+    * 3 = b10111011 = Normal, Inner/Outer WT/WA/RA
+    **********************************************/
+
+    msr MAIR_EL1, x1
     MOV64   x1, {mmu.mair}             // program mair on this CPU
-    MSR     mair_el{args.el}, x1
+    msr     mair_el{args.el}, x1
     MOV64   x1, {mmu.tcr}              // program tcr on this CPU
-    MSR     tcr_el{args.el}, x1
-    ISB
-    MRS     x2, tcr_el{args.el}         // verify CPU supports desired config
-    CMP     x2, x1
-    B.NE    .
+    msr     tcr_el{args.el}, x1
+    isb
+    msr     x2, tcr_el{args.el}         // verify CPU supports desired config
+    cmp     x2, x1
+    b.ne    .
     MOV64   x1, {mmu.sctlr}            // program sctlr on this CPU
-    MSR     sctlr_el{args.el}, x1
-    ISB                                 // synchronize context on this CPU
-    STLR    wzr, [x0]                   // release mmu_lock
-    RET                                 // done!
-    .balign 4
-    .ltorg
+    msr     sctlr_el{args.el}, x1
+    isb                                 // synchronize context on this CPU
+    ret
+    ENDFUNC mmu_on
 """
 
 output = ""
@@ -256,5 +277,13 @@ for line in _tmp.splitlines():
         comment = line[idx:]
         line = f"{code}{' ' * (41 - len(code))}{comment}"
     output += f"{line}\n"
+if not args.no_mmuon:
+    for line in mmu_on.splitlines():
+        if "//" in line and not " * " in line:
+            idx = line.index("//")
+            code = line[:idx].rstrip()
+            comment = line[idx:]
+            line = f"{code}{' ' * (41 - len(code))}{comment}"
+        output += f"{line}\n"
 
 [log.verbose(line) for line in output.splitlines()]

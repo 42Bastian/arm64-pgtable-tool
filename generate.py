@@ -1,5 +1,6 @@
 """
 Copyright (c) 2019 Ash Wilding. All rights reserved.
+              2021 SCIOPTA Systems GmbH
 
 SPDX-License-Identifier: MIT
 

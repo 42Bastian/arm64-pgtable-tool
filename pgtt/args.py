@@ -1,5 +1,6 @@
 """
 Copyright (c) 2019 Ash Wilding. All rights reserved.
+          (c) 2021 42Bastian Schick
 
 SPDX-License-Identifier: MIT
 
@@ -22,48 +23,65 @@ _parser.add_argument(
 )
 
 _parser.add_argument(
+    "-no_mmuon",
+    help="Do not generate mmu_on function",
+    default=0,
+    action="count"
+)
+
+_parser.add_argument(
     "-o",
     metavar="DST",
-    help="output GNU assembly file",
+    help="output GNU assembly file (default mmu_setup.S)",
     type=str,
-    required=True,
+    default="mmu_setup.S"
 )
 
 _parser.add_argument(
     "-ttbr1",
     help="Use TTBR1 instead of TTBR0",
-    action="count"
+    action="count",
+    default = 0
 )
 
 _parser.add_argument(
     "-ttb",
-    help="desired translation table base address as symbol!",
+    help="desired translation table base address as symbol! (default mmu_table)",
     type=str,
-    required=True,
+    default="mmu_table"
 )
 
 _parser.add_argument(
     "-el",
-    help="exception level (default: 2)",
+    help="exception level (default: 1)",
     type=int,
     choices=[1,2,3],
-    default=2,
+    default=1,
 )
 
 _parser.add_argument(
     "-tg",
     help="translation granule (default: 4K)",
     type=str,
-    choices=["4K", "16K", "64K"],
+    # we accept also low-level for the lazy ones
+    choices=["4K", "16K", "64K", "4k", "16k", "64k" ],
     default="4K",
 )
 
 _parser.add_argument(
     "-tsz",
-    help="address space size (default: 32)",
+    help="address space size (default: 40)",
     type=int,
     choices=[32,36,40,48],
-    default=32,
+    default=40,
+)
+
+_parser.add_argument(
+    "-l",
+    metavar="label",
+    help="extend labels",
+    type=str,
+    default=""
 )
 
 _parser.add_argument(
@@ -79,9 +97,14 @@ i = _args.i
 o = _args.o
 ttb = _args.ttb
 el = _args.el
-tg_str = _args.tg
-tg = {"4K":4*1024, "16K":16*1024, "64K":64*1024}[_args.tg]
+tg_str = _args.tg.upper()
+tg = {"4K":4*1024, "16K":16*1024, "64K":64*1024}[_args.tg.upper()]
 tsz = _args.tsz
-ttbr1 = _args.ttbr1
+ttbr1 = _args.ttbr1 > 0
 verbose = _args.v >= 1
 debug = _args.v >= 2
+if _args.l != "":
+    label = "_"+_args.l
+else:
+    label = ""
+no_mmuon = _args.no_mmuon > 0
