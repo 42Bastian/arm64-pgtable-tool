@@ -39,7 +39,7 @@ _parser.add_argument(
 
 _parser.add_argument(
     "-ttbr1",
-    help="Use TTBR1 instead of TTBR0",
+    help="Use TTBR1 instead of TTBR0 (default)",
     action="count",
     default = 0
 )
@@ -79,14 +79,21 @@ _parser.add_argument(
 _parser.add_argument(
     "-l",
     metavar="label",
-    help="extend labels",
+    help="extend labels with a custom identifier",
     type=str,
     default=""
 )
 
 _parser.add_argument(
     "-v",
-    help="-v for verbose, -vv for debug",
+    help="verbose",
+    action="count",
+    default=0,
+)
+
+_parser.add_argument(
+    "-d",
+    help="enable debug output",
     action="count",
     default=0,
 )
@@ -102,9 +109,6 @@ tg = {"4K":4*1024, "16K":16*1024, "64K":64*1024}[_args.tg.upper()]
 tsz = _args.tsz
 ttbr1 = _args.ttbr1 > 0
 verbose = _args.v >= 1
-debug = _args.v >= 2
-if _args.l != "":
-    label = "_"+_args.l
-else:
-    label = ""
+debug = _args.d > 0
+label = "_"+_args.l if _args.l != "" else ""
 no_mmuon = _args.no_mmuon > 0

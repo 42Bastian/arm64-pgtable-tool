@@ -64,10 +64,10 @@ class Table:
         Map a region of memory in this translation table.
         """
         log.debug()
-        log.debug(f"mapping region {hex(region.addr)} in level {self.level} table")
+        log.debug(f"mapping region {hex(region.virtaddr)}->{hex(region.addr)} in level {self.level} table")
         log.debug(region)
-        assert(region.addr >= self.va_base)
-        assert(region.addr + region.length <= self.va_base + mmu.entries_per_table * self.chunk)
+        assert(region.virtaddr >= self.va_base)
+        assert(region.virtaddr + region.length <= self.va_base + mmu.entries_per_table * self.chunk)
 
         """
         Calculate number of chunks required to map this region.
@@ -75,7 +75,7 @@ class Table:
         start_idx is the first entry in this table mapping part of the region.
         """
         num_chunks = region.length // self.chunk
-        start_idx = (region.addr // self.chunk) % mmu.entries_per_table
+        start_idx = (region.virtaddr // self.chunk) % mmu.entries_per_table
 
         """
         Check whether the region is "floating".
@@ -107,7 +107,7 @@ class Table:
                  \\ |                    |
                     +--------------------+
         """
-        underflow = region.addr % self.chunk
+        underflow = region.virtaddr % self.chunk
         if underflow:
             log.debug(f"{underflow=}, dispatching to next-level table")
             self.prepare_next(start_idx)
@@ -128,13 +128,15 @@ class Table:
                  \\ |####################|
                     +--------------------+
         """
-        overflow = (region.addr + region.length) % self.chunk
+        overflow = (region.virtaddr + region.length) % self.chunk
         if overflow:
             log.debug(f"{overflow=}, dispatching to next-level table")
             final_idx = start_idx + num_chunks - (not not underflow)
-            va_base = ((region.addr + region.length) // self.chunk) * self.chunk
+            va_base = ((region.virtaddr + region.length) // self.chunk) * self.chunk
+            paddr =  ((region.addr + region.length) // self.chunk) * self.chunk
+
             self.prepare_next(final_idx, va_base)
-            self.entries[final_idx].map(region.copy(addr=va_base, length=overflow))
+            self.entries[final_idx].map(region.copy(addr=paddr, virtaddr=va_base, length=overflow))
 
         """
         Handle any remaining complete chunks.
@@ -144,9 +146,14 @@ class Table:
         if underflow + overflow == self.chunk:
             num_chunks = num_chunks - 1
         num_contiguous_blocks = 0
+
         for i in range(start_idx, start_idx + num_chunks):
-            log.debug(f"mapping complete chunk at index {i}")
-            r = region.copy(addr=(self.va_base + i * self.chunk))
+            off_v=i*self.chunk;
+            off_p=(i-start_idx)*self.chunk;
+
+            log.debug(f"mapping complete chunk at index {i} {hex(region.addr+off_p)}")
+
+            r = region.copy(virtaddr=(self.va_base + off_v), addr=(region.addr + off_p))
             if not blocks_allowed:
                 self.prepare_next(i)
                 self.entries[i].map(r)
@@ -155,7 +162,7 @@ class Table:
             num_contiguous_blocks += 1
         if num_contiguous_blocks > 0:
             self.entries[start_idx].num_contig = num_contiguous_blocks
-
+        log.debug("..")
 
     def __str__( self ) -> str:
         """
@@ -163,9 +170,10 @@ class Table:
         """
         skip = 0
         last_string = ""
-        last_label = ""
+        last_comment = ""
 
-        margin = " " * (self.level - mmu.start_level) * 4
+        margin = " " * (self.level - mmu.start_level) * 1
+        margin2 = " " * (4 - self.level) * 1
         string = f"{margin}level {self.level} table @ {args.ttb} + {hex(self.addr)}\n"
         for k in sorted(list(self.entries.keys())):
             entry = self.entries[k]
@@ -176,57 +184,79 @@ class Table:
                         string += '{}        ...\n'.format(margin)
                     string += last_string
 
-                header = "{}[#{:>4}]".format(margin, k)
+                header = "{}[{:>4}]".format(margin, k)
                 nested_table = str(entry)
                 hyphens = "-" * (len(nested_table.splitlines()[0]) - len(header))
                 string += f"{header}" + hyphens + f"\\\n{nested_table}"
                 skip = 0
                 last_string = ""
-                last_label = ""
+                last_comment = ""
             else:
-                if entry.memory_type == mmap.MEMORY_TYPE.rw_data:
-                    memtype = "RW_Data"
-                elif entry.memory_type == mmap.MEMORY_TYPE.device:
-                    memtype = "Device"
-                elif entry.memory_type == mmap.MEMORY_TYPE.code:
-                    memtype = "Code"
+                mt = entry.memory_type & 3
+                memtype = "S" if (entry.memory_type & 4) else " "
+                if mt == mmap.MEMORY_TYPE.DEVICE:
+                    memtype += "DE"
+                elif mt == mmap.MEMORY_TYPE.CACHE_WB:
+                    memtype += "WB"
+                elif mt == mmap.MEMORY_TYPE.CACHE_WT:
+                    memtype += "WT"
                 else:
-                    memtype = "No Cache"
+                    memtype += "NC"
 
-                if (last_label != entry.label):
+                rights=""
+                rights  = "XN" if entry.ap_type & mmap.AP_TYPE.SXN else " X"
+                rights += " XN" if entry.ap_type & mmap.AP_TYPE.UXN else "  X"
+                if (entry.ap_type & 3) == mmap.AP_TYPE.SRW_UNA:
+                    rights += " WR UN"
+                elif (entry.ap_type & 3) == mmap.AP_TYPE.SRW_URW:
+                    rights += " RW RW"
+                elif (entry.ap_type & 3) == mmap.AP_TYPE.SRO_UNA:
+                    rights += " RO UN"
+                else:
+                    rights += " RO RO"
+                rights += " -" if entry.ap_type & mmap.AP_TYPE.NS else " S"
+
+                rights += " G" if entry.memory_type & mmap.MEMORY_TYPE.GLOBAL else " -"
+
+                if (last_comment != entry.comment):
                     if skip > 0:
                         if skip > 1:
                             string += '{}        ...\n'.format(margin)
                         string += last_string
 
-                    x = "{}[#{:>4}] 0x{:>012}-0x{:>012}, ".format(
+                    string += "{}{}       --- {} ---\n".format(margin,margin2,entry.comment)
+                    x = "{}[{:>4}]{}{:>010}-{:>010}=>{:>010}-{:>010},".format(
                         margin,
                         k,
+                        margin2,
                         hex(entry.addr)[2:],
-                        hex(entry.addr + entry.length - 1)[2:])
+                        hex(entry.addr + entry.length - 1)[2:],
+                        hex(entry.virtaddr)[2:],
+                        hex(entry.virtaddr + entry.length - 1)[2:])
 
-                    offset = " " * (77-len(x)-26)
-                    string += x+"{}{:>8}, {:>16}\n".format(
+                    offset = " " * (63-len(x)-8)
+                    string += x+"{} {} {}\n".format(
                         offset,
-                        memtype,
-                        entry.label)
+                        memtype,rights)
 
                     skip = 0;
                     last_string = ""
-                    last_label = entry.label
+                    last_comment = entry.comment
                 else:
                     skip += 1
-                    x = "{}[#{:>4}] 0x{:>012}-0x{:>012}, ".format(
+                    x = "{}[{:>4}]{}{:>010}-{:>010}=>{:>010}-{:>010},".format(
                         margin,
                         k,
+                        margin2,
                         hex(entry.addr)[2:],
-                        hex(entry.addr + entry.length - 1)[2:])
+                        hex(entry.addr + entry.length - 1)[2:],
+                        hex(entry.virtaddr)[2:],
+                        hex(entry.virtaddr + entry.length - 1)[2:])
 
-                    offset = " " * (77-len(x)-26)
-                    last_string = x+"{}{:>8}, {:>16}\n".format(
+                    offset = " " * (63-len(x)-8)
+                    last_string = x+"{} {} {}\n".format(
                         offset,
-                        memtype,
-                        entry.label)
+                        memtype, rights)
 
         if skip > 0:
             if skip > 1:

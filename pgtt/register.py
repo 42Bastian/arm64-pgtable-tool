@@ -39,6 +39,7 @@ class Register:
     def __init__( self, name:str ):
         self.name = name
         self.fields = {}
+        self.start = {}
         self.res1s = []
         log.debug()
         log.debug(f"{name}")
@@ -49,6 +50,7 @@ class Register:
         Add a bitfield to this system register.
         """
         self.fields[name] = Bitfield(hi, lo, value)
+        self.start[name] = lo
         log.debug(f"{self.name}.{name}={value}")
 
 
@@ -60,7 +62,7 @@ class Register:
         log.debug(f"{self.name}.res1[{pos}]=1")
 
 
-    def value( self ) -> str:
+    def value( self ):
         """
         Generate the required runtime value for this system register.
         """
@@ -68,4 +70,8 @@ class Register:
         for f in list(self.fields.values()) + self.res1s:
             val = val | f
         log.debug(f"{self.name}={hex(val)}")
-        return val
+        str = ""
+        for f in list(self.fields):
+            if f[0] != '-':
+                str +=f"{f}:{hex(self.fields[f].value>>self.start[f])} "
+        return (val,str)

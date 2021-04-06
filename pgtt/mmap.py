@@ -7,6 +7,7 @@ SPDX-License-Identifier: MIT
 
 # Standard Python deps
 from enum import Enum
+from enum import IntEnum
 import errno
 import re
 import sys
@@ -19,12 +20,22 @@ from . import log
 # External deps
 from intervaltree import Interval, IntervalTree
 
-class MEMORY_TYPE(Enum):
-        device = 0,
-        rw_data = 1,
-        code = 2,
-        no_cache = 3,
-        rw_data_wb = 4
+class AP_TYPE(IntEnum):
+        NS  = 16,
+        UXN = 8,
+        SXN = 4,
+        SRW_UNA = 0,   # implies User no access
+        SRW_URW = 1,   # implies SRW
+        SRO_UNA = 2,   # implies User no access
+        SRO_URO = 3    # implies SRO
+
+class MEMORY_TYPE(IntEnum):
+        DEVICE = 0,
+        CACHE_WB = 1,
+        CACHE_WT = 2,
+        NO_CACHE = 3,
+        SHARED = 4,
+        GLOBAL = 8
 
 @dataclass
 class Region:
@@ -33,10 +44,12 @@ class Region:
     """
 
     lineno: int                    # line number in source memory map file
-    label: str                     # name/label e.g. DRAM, GIC, UART, ...
+    comment: str                   # name/comment e.g. DRAM, GIC, UART, ...
     addr: int                      # base address
+    virtaddr: int                  # virtual base addr
     length: int                    # length in bytes
-    memory_type: MEMORY_TYPE         # True for Device-nGnRnE, False for Normal WB RAWA
+    memory_type: MEMORY_TYPE       # True for Device-nGnRnE, False for Normal WB RAWA
+    ap_type: AP_TYPE               # Access right
     num_contig = 1
 
 
@@ -45,7 +58,7 @@ class Region:
         Create a duplicate of this Region.
         Use kwargs to override this region's corresponding properties.
         """
-        region = Region(self.lineno, self.label, self.addr, self.length, self.memory_type)
+        region = Region(self.lineno,self.comment, self.addr, self.virtaddr, self.length, self.memory_type, self.ap_type)
         for kw,arg in kwargs.items():
             region.__dict__[kw] = arg
         return region
@@ -55,8 +68,8 @@ class Region:
         """
         Override default __str__ to print addr and length in hex format.
         """
-        return "Region(lineno={}, label='{}', addr={}, length={}, memory_type={}".format(
-            self.lineno, self.label, hex(self.addr), hex(self.length), self.memory_type
+        return "Region(lineno={}, comment='{}', addr={}, virtaddr={}, length={}, memory_type={}".format(
+            self.lineno, self.comment, hex(self.addr), hex(self.virtaddr), hex(self.length), self.memory_type, self.ap_type
         )
 
 
@@ -99,15 +112,29 @@ class MemoryMap():
                     Ensure correct number of fields have been specified.
                     """
                     split_line = line.split(",")
-                    if len(split_line) < 4:
+                    if len(split_line) < 6:
                         abort_bad_region("format: incomplete", line)
-                    if len(split_line) > 4:
+                    if len(split_line) > 6:
                         abort_bad_region("format: unexpected field(s)", line[line.find(split_line[4]):])
-                    (addr, length, attrs, label) = split_line
+                    (addr, virtaddr, length, memtype, rights, comment) = split_line
                     addr = addr.strip()
+                    virtaddr = virtaddr.strip()
+                    if virtaddr == "":
+                        virtaddr = addr
                     length = length.strip()
-                    attrs = attrs.strip()
-                    label = label.strip()
+                    memtype = memtype.strip()
+                    split_memtype = memtype.split(":")
+                    if len(split_memtype) > 3:
+                        abort_bad_region("To many options", line)
+                    memtype = split_memtype[0]
+
+                    split_rights = rights.split(":")
+                    if len(split_rights) < 1:
+                        abort_bad_region("Missing rights", line)
+#                    if len(split_rights) > 2:
+#                        abort_bad_region("To many rights", line)
+
+                    comment = comment.strip()
 
                     """
                     Parse region base address.
@@ -117,6 +144,18 @@ class MemoryMap():
                         addr = int(addr, base=(16 if addr.startswith("0x") else 10))
                     except ValueError:
                         abort_bad_region("base address", addr)
+
+                    log.debug(f"parsing virtual base address: {virtaddr}")
+                    try:
+                        virtaddr = int(virtaddr, base=(16 if virtaddr.startswith("0x") else 10))
+                    except ValueError:
+                        abort_bad_region("virtual base address", virtaddr)
+
+                    if addr > (1 << args.tsz):
+                        abort_bad_region("out address too largs", addr)
+
+                    if virtaddr > (1 << args.tsz):
+                        abort_bad_region("VA address too largs", hex(virtaddr))
 
                     """
                     Parse region length.
@@ -141,6 +180,11 @@ class MemoryMap():
                         length = length + args.tg
                         log.debug("corrected misalignment, new addr={}, length={}".format(hex(addr), hex(length)))
 
+                    misalignment = virtaddr % args.tg
+                    if misalignment:
+                        virtaddr = virtaddr - misalignment
+                        log.debug("corrected misalignment, new addr={}, length={}".format(hex(addr), hex(length)))
+
                     overflow = length % args.tg
                     if overflow:
                         length = length + args.tg - overflow
@@ -149,25 +193,74 @@ class MemoryMap():
                     """
                     Parse region attributes.
                     """
-                    log.debug(f"parsing attributes: {attrs}")
-                    if not attrs in ["RW_DATA", "DEVICE", "CODE", "NO_CACHE" ]:
-                        abort_bad_region("attributes", attrs)
-                    if attrs == "DEVICE":
-                        memory_type = MEMORY_TYPE.device
-                    elif attrs == "RW_DATA":
-                        memory_type = MEMORY_TYPE.rw_data
-                    elif attrs == "CODE":
-                        memory_type = MEMORY_TYPE.code
-                    else:
-                        memory_type = MEMORY_TYPE.no_cache
+                    memory_type = 0
+                    log.debug(f"parsing memory type: {memtype}")
+                    for memtype in split_memtype:
+                        memtype = memtype.strip()
+                        if not memtype in ["DEVICE", "CACHE_WB", "CACHE_WT", "NO_CACHE", "GLOBAL", "SHARED" ]:
+                            abort_bad_region("memory type", memtype)
+
+                        if (memory_type & 3) and memtype in ["DEVICE", "CACHE_WB", "CACHE_WT", "NO_CACHE"]:
+                            abort_bad_region("memory type", memtype)
+
+                        if memtype == "DEVICE":
+                            memory_type |= MEMORY_TYPE.DEVICE
+                        elif memtype == "CACHE_WB":
+                            memory_type |= MEMORY_TYPE.CACHE_WB
+                        elif memtype == "CACHE_WT":
+                            memory_type |= MEMORY_TYPE.CACHE_WT
+                        elif memtype == "NO_CACHE":
+                            memory_type |= MEMORY_TYPE.NO_CACHE
+                        elif memtype == "SHARED":
+                            memory_type |= MEMORY_TYPE.SHARED
+                        else:
+                            memory_type |= MEMORY_TYPE.GLOBAL
 
                     log.debug(f"{memory_type=}")
+
+                    """
+                    Parse access rights
+                    """
+                    ap_right = AP_TYPE.SXN|AP_TYPE.UXN
+                    for ap in split_rights:
+                        ap = ap.strip()
+                        if not ap in ["SX", "UX", "SRW_UNA", "SRW_URW", "SRO_UNA", "SRO_URO", "NS", "GLOBAL"]:
+                            abort_bad_region("access rights", ap)
+                        if ap == "SX":
+                            ap_right &= ~AP_TYPE.SXN
+                        elif ap == "UX":
+                            ap_right &= ~AP_TYPE.UXN
+                        elif ap == "NS":
+                            ap_right |= AP_TYPE.NS
+                        elif ap == "SHARED":
+                            ap_right |= AP_TYPE.SHARED
+                        elif ap == "GLOBAL":
+                            memory_type |= MEMORY_TYPE.GLOBAL
+                        elif ap == "SRW_UNA":
+                            if (ap_right & 3):
+                                abort_bad_region("access rights", ap)
+                            ap_right |= AP_TYPE.SRW_UNA
+                        elif ap == "SRW_URW":
+                            if (ap_right & 3):
+                                abort_bad_region("access rights", ap)
+                            ap_right |= AP_TYPE.SRW_URW
+                        elif ap == "SRO_UNA":
+                            if (ap_right & 3):
+                                abort_bad_region("access rights", ap)
+                            ap_right |= AP_TYPE.SRO_UNA
+                        else:
+                            if (ap_right & 3):
+                                abort_bad_region("access rights", ap)
+                            ap_right |= AP_TYPE.SRO_URO
+
+                    if memory_type == MEMORY_TYPE.DEVICE and (ap_right >> 2) != 3:
+                        abort_bad_region(": Device region not be SX or UX!",hex(ap_right))
 
                     """
                     Check for overlap with other regions.
                     """
                     log.debug(f"checking for overlap with existing regions")
-                    overlap = sorted(self._ivtree[addr:addr+length])
+                    overlap = sorted(self._ivtree[virtaddr:virtaddr+length])
                     if overlap:
                         log.error(f"in {map_file} on line {lineno+1}: region overlaps other regions")
                         log.error(f"    {line}")
@@ -178,8 +271,8 @@ class MemoryMap():
                     """
                     Add parsed region to memory map.
                     """
-                    r = Region(lineno+1, label, addr, length, memory_type)
-                    self._ivtree.addi(addr, addr+length, r)
+                    r = Region(lineno+1, comment, addr, virtaddr, length, memory_type, ap_right)
+                    self._ivtree.addi(virtaddr, virtaddr+length, r)
                     log.debug(f"added {r}")
 
         except OSError as e:

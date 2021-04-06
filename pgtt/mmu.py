@@ -78,14 +78,13 @@ def _tcr() -> str:
         reg.field(18, 16, "ps", ps_val)
         reg.res1(31)
 
-    return hex(reg.value())
+    return hex(reg.value()[0])
 
 tcr = _tcr()
 
 """
-
-AttrIndx [0] = Normal Inner/Outer Write-Back RA/WA
-AttrIndx [1] = Device-nGnRnE
+AttrIndx [0] = Device-nGnRnE
+AttrIndx [1] = Normal, Inner/Outer Write-Back RA/WA
 AttrIndx [2] = Normal, Inner/Outer Non-Cacheable
 AttrIndx [3] = Normal, Inner/Outer Write-Thru RA/WA
 """
@@ -112,60 +111,56 @@ def _sctlr() -> str:
     reg.field(12, 12, "i", 1),   # I-side access cacheability controlled by pgtables
 
 
-    return hex(reg.value())
+    return hex(reg.value()[0])
 
 sctlr = _sctlr()
 
 
-def _template_block_page ( memory_type:mmap.MEMORY_TYPE, is_page:bool ):
+def block_page_template ( memory_type:mmap.MEMORY_TYPE,
+                          ap:mmap.AP_TYPE,
+                          is_page:bool ):
     """
     Translation table entry fields common across all exception levels.
     """
     pte = Register("pte")
-    pte.field( 0,  0, "valid", 1)
-    pte.field( 1,  1, "[1]", int(is_page))
-    if memory_type == mmap.MEMORY_TYPE.device:
+    pte.field( 0,  0, "-valid", 1)
+    pte.field( 1,  1, "page", int(is_page))
+    # Inner Shareable, ignored by Device memory
+    pte.field( 9,  8, "SH", 3 if memory_type & 4 else 0)
+    pte.field(10, 10, "AF", 1)  # Disable Access Flag faults
+    pte.field(11, 11, "nG", 1 if memory_type & 8 else 0)
+    mt = memory_type & 3
+    if mt == mmap.MEMORY_TYPE.DEVICE:
+        pte.field( 4,  2, "attrindx", 0)
+    elif mt == mmap.MEMORY_TYPE.CACHE_WB:
         pte.field( 4,  2, "attrindx", 1)
-    elif memory_type == mmap.MEMORY_TYPE.rw_data:
-        pte.field( 4,  2, "attrindx", 0)
-        pte.field( 7,  6, "AP", 0)
-    elif memory_type == mmap.MEMORY_TYPE.no_cache:
+    elif mt == mmap.MEMORY_TYPE.NO_CACHE:
         pte.field( 4,  2, "attrindx", 2)
-        pte.field( 7,  6, "AP", 0)
-    elif memory_type == mmap.MEMORY_TYPE.code:
-        pte.field( 4,  2, "attrindx", 0)
-        pte.field( 7,  6, "AP", 2)
     else:
         pte.field( 4,  2, "attrindx", 3)
-        pte.field( 7,  6, "AP", 0)
 
-    pte.field( 9,  8, "sh", 3)  # Inner Shareable, ignored by Device memory
-    pte.field(10, 10, "af", 1)  # Disable Access Flag faults
-
+    pte.field( 5, 5, "NS", int((ap & mmap.AP_TYPE.NS) != 0))
     """
     Exception level specific differences.
     """
-    if memory_type != mmap.MEMORY_TYPE.code:
-        if args.el == 1:
-            pte.field(53, 53, "pxn", 1)
-        else:
-            pte.field(54, 54, "xn", 1)
-
+    if (ap & mmap.AP_TYPE.UXN) and (ap & mmap.AP_TYPE.SXN):
+        pte.field(54, 54, "xn", 1)
+        pte.field(53, 53, "pxn", 1)
+    elif (ap & mmap.AP_TYPE.UXN):
+        pte.field(53, 53, "xn", 1)
+        pte.field(53, 53, "pxn", 0)
+    elif (ap & mmap.AP_TYPE.SXN):
+        pte.field(53, 53, "pxn", 1)
+        pte.field(54, 54, "xn", 0)
     else:
-        if args.el == 1:
-            pte.field(53, 53, "pxn", 0)
-            pte.field(54, 54, "xn", 0)
+        pte.field(53, 53, "pxn", 0)
+        pte.field(54, 54, "xn", 0)
+    """
+    Access rights
+    """
+    pte.field( 7,  6, "AP", ap & 3)
 
-    return hex(pte.value())
-
-
-def block_template( memory_type:mmap.MEMORY_TYPE ):
-    return _template_block_page(memory_type, is_page=False)
-
-
-def page_template( memory_type:mmap.MEMORY_TYPE):
-    return _template_block_page(memory_type, is_page=True)
-
+    return (hex(pte.value()[0]), pte.value()[1])
 
 def table_template():
     return hex(0x3)

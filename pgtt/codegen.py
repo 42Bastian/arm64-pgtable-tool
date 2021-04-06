@@ -29,10 +29,10 @@ def _mk_table( n:int, t:table.Table ) -> str:
     return f"""
 /* program_table_{n} */
     MOV64   x21, {hex(t.addr)}          // base address of this table
-    add     x21, x21, x20          // add global base
+    add     x21, x21, x20       // add global base
     MOV64   x22, {hex(t.chunk)}         // chunk size"""
 
-def _mk_blocks( n:int, t:table.Table, idx:int, r:Region ) -> str:
+def _mk_blocks( n:int, t:table.Table, index:int, r:Region ) -> str:
     """
     Generate assembly to program a range of contiguous block/page entries.
 
@@ -45,49 +45,43 @@ def _mk_blocks( n:int, t:table.Table, idx:int, r:Region ) -> str:
         t
                     translation table being programmed
 
-        idx
+        index
                     index of the first block/page in the contiguous range
 
         r
                     the memory region
     """
-    if r.memory_type == mmap.MEMORY_TYPE.device:
-        template_reg = "x2" if t.level < 3 else "x3"
-    elif r.memory_type == mmap.MEMORY_TYPE.rw_data:
-        template_reg = "x4" if t.level < 3 else "x5"
-    elif r.memory_type == mmap.MEMORY_TYPE.no_cache:
-        template_reg = "x6" if t.level < 3 else "x7"
-    else:
-        template_reg = "x8" if t.level < 3 else "x9"
-
+    (value,comment) = mmu.block_page_template(r.memory_type, r.ap_type, t.level >= 3)
     if r.num_contig > 1:
         return f"""
-/* program_table_{n}_entry_{idx}_to_{idx + r.num_contig - 1} */
-/* {r.label} */
-    MOV64   x10, {idx}                 // idx
-    MOV64   x11, {r.num_contig}         // number of contiguous entries
-    MOV64   x12, {hex(r.addr)}         // output address of entry[idx]
+/* {r.comment} */
+/* {comment} */
+    MOV64    x9, {value}  //
+    MOV64   x10, {index}            // index: {index}
+    MOV64   x11, {index + r.num_contig}     // to {index + r.num_contig} ({r.num_contig} entries)
+    MOV64   x12, {hex(r.addr)}      // output address of entry[index]
 1:
-    orr     x12, x12, {template_reg}    // merge output address with template
-    str     X12, [x21, x10, lsl #3]      // write entry into table
+    orr     x12, x12, x9    // merge output address with template
+    str     X12, [x21, x10, lsl #3]     // write entry into table
     add     x10, x10, #1                // prepare for next entry
-    add     x12, x12, x22                // add chunk to address
-    subs    x11, x11, #1                // loop as required
-    b.ne    1b
+    add     x12, x12, x22               // add chunk to address
+    cmp     x10, x11            // last index?
+    b.ne    1b                      //
 """
     else:
         return f"""
-/* program_table_{n}_entry_{idx} */
-/* {r.label} */
-    MOV64   x10, {idx}                 // idx
-    MOV64   x12, {hex(r.addr)}         // output address of entry[idx]
-    orr     x12, x12, {template_reg}    // merge output address with template
-    str     X12, [x21, x10, lsl #3]      // write entry into table
+/* {r.comment} */
+/* {comment} */
+    MOV64    x9, {value} //
+    MOV64   x10, {index}                // index: {index}
+    MOV64   x12, {hex(r.addr)}      // output address of entry[index]
+    orr     x12, x12, x9    // merge output address with template
+    str     x12, [x21, x10, lsl #3]     // write entry into table
 """
 
 
 
-def _mk_next_level_table( n:int, idx:int, next_t:table.Table ) -> str:
+def _mk_next_level_table( n:int, index:int, next_t:table.Table ) -> str:
     """
     args
     ====
@@ -95,19 +89,18 @@ def _mk_next_level_table( n:int, idx:int, next_t:table.Table ) -> str:
         n
                     parent table number in sequential order from ttbr0_eln
 
-        idx
+        index
                     index of the next level table pointer
 
         next_t
                     the next level translation table
     """
+#/* program_table_{n}_entry_{index} */
     return f"""
-/* program_table_{n}_entry_{idx} */
-    MOV64   x10, {idx}                 // idx
-    MOV64   x11, {hex(next_t.addr)}    // next-level table address
-    add     x11, x11, x20              // add base address
-    orr     x11, x11, #0x3             // next-level table descriptor
-    str     x11, [x21, x10, lsl #3]     // write entry into table"""
+    MOV64   x11, {hex(next_t.addr)} // next-level table address
+    add     x11, x11, x20               // add base address
+    orr     x11, x11, #0x3              // next-level table descriptor
+    str     x11, [x21, #{index}*8]     // write entry[{index}] into table"""
 
 
 def _mk_asm() -> str:
@@ -119,15 +112,15 @@ def _mk_asm() -> str:
         string += _mk_table(n, t)
         keys = sorted(list(t.entries.keys()))
         while keys:
-            idx = keys[0]
-            entry = t.entries[idx]
+            index = keys[0]
+            entry = t.entries[index]
             if type(entry) is Region:
-                string += _mk_blocks(n, t, idx, entry)
-                for k in range(idx, idx+entry.num_contig):
+                string += _mk_blocks(n, t, index, entry)
+                for k in range(index, index+entry.num_contig):
                     keys.remove(k)
             else:
-                string += _mk_next_level_table(n, idx, entry)
-                keys.remove(idx)
+                string += _mk_next_level_table(n, index, entry)
+                keys.remove(index)
     return string
 
 ttbr="ttbr0"
@@ -153,6 +146,15 @@ _tmp =f"""/*
  *
  * This code programs the following translation table structure:
  *
+ * Index     physical             =>  virtual              Type
+ * -----------------------------------------------------------------------------
+ *                                                         SNC P  U  P  U  S G
+ *                                               shared ___| | r  s  r  s  e l
+ *                                            no cache  NC___| i  e  i  e  c o
+ *                                              device  DE___| n  r  v  r  u b
+ *                                          write back  WB___|             r a
+ *                                          write thru  WT___| Exe   AP    e L
+ * -----------------------------------------------------------------------------
 {_newline.join([f' * {ln}' for ln in str(table.root).splitlines()])}
  *
  * The following command line arguments were passed to arm64-pgtable-tool:
@@ -162,6 +164,8 @@ _tmp =f"""/*
  *      -el {args.el}
  *      -tg {args.tg_str}
  *      -tsz {args.tsz}
+ *{f'      -no_mmuon' if args.no_mmuon else ''}
+ *{f'      -l {args.label[1:]}' if args.label != "" else ''}
  *
 {_newline.join([f' * {ln}' for ln in table.Table.usage().splitlines()])}
  *
@@ -202,31 +206,22 @@ _tmp =f"""/*
  * Setup the page table.
  * Not reentrant!
  */
-    FUNC64 pagetable_init{args.label}
-    adrp    x20, {args.ttb}
+    FUNC64 pagetable_init{args.label} //
+    adrp    x20, {args.ttb} // base address
 /* zero_out_tables */
-    mov     x2,x20
-    MOV64   x3, {hex(args.tg * len(table.Table._allocated))}   // combined length of all tables
-    fmov    d0, xzr                     // clear q0
+    mov     x2,x20 //
+    MOV64   x3, {hex(args.tg * len(table.Table._allocated))}// combined length of all tables
 1:
-    stp     q0, q0, [x2], #32           // zero out 4 table entries at a time
-    subs    x3, x3, #32
-    b.ne    1b
-
-/* load_descriptor_templates */
-    MOV64    x2, {mmu.block_template(memory_type=mmap.MEMORY_TYPE.device)}   // Device block
-    MOV64    x3, {mmu.page_template(memory_type=mmap.MEMORY_TYPE.device)}    // Device page
-    MOV64    x4, {mmu.block_template(memory_type=mmap.MEMORY_TYPE.rw_data)}  // RW data block
-    MOV64    x5, {mmu.page_template(memory_type=mmap.MEMORY_TYPE.rw_data)}   // RW data page
-    MOV64    x6, {mmu.block_template(memory_type=mmap.MEMORY_TYPE.no_cache)} // no_cache block
-    MOV64    x7, {mmu.page_template(memory_type=mmap.MEMORY_TYPE.no_cache)}  // no_cache page
-    MOV64    x8, {mmu.block_template(memory_type=mmap.MEMORY_TYPE.code)}     // code block
-    MOV64    x9, {mmu.page_template(memory_type=mmap.MEMORY_TYPE.code)}      // code page
+    stp     xzr, xzr, [x2]       // zero out 2 table entries at a time
+    subs    x3, x3, #16     //
+    add     x2, x2, #16     //
+    b.ne    1b              //
 {_mk_asm()}
-    ret                                 // done!
-    ENDFUNC pagetable_init{args.label}
+    ret                             // done!
+    ENDFUNC pagetable_init{args.label}  //
 
     .section noinit.mmu,"aw",@nobits
+    .globl mmu_table
     .align 12
 {args.ttb}: .space {hex(args.tg * len(table.Table._allocated))}
 """
@@ -235,16 +230,16 @@ mmu_on = f"""
 /*
  * Set translation table and enable MMU
  */
-    FUNC64 mmu_on
-    adrp    x1, mmu_init               // get 4KB page containing mmu_init
-    ldr     w2, [x1,#:lo12:mmu_init]   // read mmu_init
-    cbz     w2, .                      // init not done, endless loop
+    FUNC64 mmu_on //
+    adrp    x1, mmu_init            // get 4KB page containing mmu_init
+    ldr     w2, [x1,#:lo12:mmu_init]    // read mmu_init
+    cbz     w2, .                   // init not done, endless loop
 
-    adrp    x6, {args.ttb}             // address of first table
-    msr     {ttbr}_el{args.el}, x6
-    .if {args.el} == 1
-    msr     {ttbro}_el1,xzr
-    .endif
+    adrp    x6, {args.ttb}      // address of first table
+    msr     {ttbr}_el{args.el}, x6  //
+    .if {args.el} == 1          //
+    msr     {ttbro}_el1,xzr         //
+    .endif                      //
     /**********************************************
     * Set up memory attributes
     * This equates to:
@@ -254,37 +249,42 @@ mmu_on = f"""
     * 3 = b10111011 = Normal, Inner/Outer WT/WA/RA
     **********************************************/
 
-    msr MAIR_EL1, x1
-    MOV64   x1, {mmu.mair}             // program mair on this CPU
-    msr     mair_el{args.el}, x1
-    MOV64   x1, {mmu.tcr}              // program tcr on this CPU
-    msr     tcr_el{args.el}, x1
-    isb
+    msr MAIR_EL1, x1                //
+    MOV64   x1, {mmu.mair}          // program mair on this CPU
+    msr     mair_el{args.el}, x1 //
+    MOV64   x1, {mmu.tcr}           // program tcr on this CPU
+    msr     tcr_el{args.el}, x1 //
+    isb //
     mrs     x2, tcr_el{args.el}         // verify CPU supports desired config
-    cmp     x2, x1
-    b.ne    .
-    MOV64   x1, {mmu.sctlr}            // program sctlr on this CPU
-    msr     sctlr_el{args.el}, x1
-    isb                                 // synchronize context on this CPU
-    ret
+    cmp     x2, x1 //
+    b.ne    .                       //
+    MOV64   x1, {mmu.sctlr}         // program sctlr on this CPU
+    msr     sctlr_el{args.el}, x1       //
+    isb                             // synchronize context on this CPU
+    ret                             //
     ENDFUNC mmu_on
 """
-
+TAB='\t'
 output = ""
 for line in _tmp.splitlines():
-    if "//" in line and not " * " in line:
-        idx = line.index("//")
-        code = line[:idx].rstrip()
-        comment = line[idx:]
-        line = f"{code}{' ' * (41 - len(code))}{comment}"
+    if "//" in line and not " *" in line:
+        index = line.index("//")
+        code = line[:index].rstrip(" \t").lstrip(" \t")
+        comment = line[index:]
+        line = f"\t{code}{TAB * (4-(len(code)>>3))}{comment}"
+    elif not " *" and not "/*" and not "*/" in line:
+        line = f"\t"+line.rstrip().lstrip()
     output += f"{line}\n"
+
 if not args.no_mmuon:
     for line in mmu_on.splitlines():
-        if "//" in line and not " * " in line:
-            idx = line.index("//")
-            code = line[:idx].rstrip()
-            comment = line[idx:]
-            line = f"{code}{' ' * (41 - len(code))}{comment}"
+        if "//" in line and not " *" in line:
+            index = line.index("//")
+            code = line[:index].rstrip(" \t").lstrip(" \t")
+            comment = line[index:]
+            line = f"\t{code}{TAB * (4-(len(code)>>3))}{comment}"
+        elif not " *" and not "/*" and not "*/" in line:
+            line = f"\t"+line.rstrip().lstrip()
         output += f"{line}\n"
 
 [log.verbose(line) for line in output.splitlines()]
