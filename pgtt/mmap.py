@@ -99,6 +99,9 @@ class MemoryMap():
                     if line[0] == '#':
                         continue
 
+                    if line.startswith('//'):
+                        continue
+
                     def abort_bad_region( msg:str, variable ) -> None:
                         """
                         Pretty-print an error message and force-exit the script.
@@ -141,15 +144,15 @@ class MemoryMap():
                     """
                     log.debug(f"parsing base address: {addr}")
                     try:
-                        addr = int(addr, base=(16 if addr.startswith("0x") else 10))
-                    except ValueError:
+                        addr = eval(addr)
+                    except SyntaxError:
                         abort_bad_region("base address", addr)
 
                     log.debug(f"parsing virtual base address: {virtaddr}")
                     try:
-                        virtaddr = int(virtaddr, base=(16 if virtaddr.startswith("0x") else 10))
-                    except ValueError:
-                        abort_bad_region("virtual base address", virtaddr)
+                        virtaddr = eval(virtaddr)
+                    except SyntaxError:
+                        abort_bad_region("virtual address", virtaddr)
 
                     if addr > (1 << args.tsz):
                         abort_bad_region("out address too largs", addr)

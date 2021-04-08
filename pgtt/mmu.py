@@ -128,7 +128,7 @@ def block_page_template ( memory_type:mmap.MEMORY_TYPE,
     # Inner Shareable, ignored by Device memory
     pte.field( 9,  8, "SH", 3 if memory_type & 4 else 0)
     pte.field(10, 10, "AF", 1)  # Disable Access Flag faults
-    pte.field(11, 11, "nG", 1 if memory_type & 8 else 0)
+    pte.field(11, 11, "nG", 0 if memory_type & 8 else 1)
     mt = memory_type & 3
     if mt == mmap.MEMORY_TYPE.DEVICE:
         pte.field( 4,  2, "attrindx", 0)
@@ -147,14 +147,14 @@ def block_page_template ( memory_type:mmap.MEMORY_TYPE,
         pte.field(54, 54, "xn", 1)
         pte.field(53, 53, "pxn", 1)
     elif (ap & mmap.AP_TYPE.UXN):
-        pte.field(53, 53, "xn", 1)
+        pte.field(54, 54, "xn", 1)
         pte.field(53, 53, "pxn", 0)
     elif (ap & mmap.AP_TYPE.SXN):
+        pte.field(54, 54, "xn", 0)
         pte.field(53, 53, "pxn", 1)
-        pte.field(54, 54, "xn", 0)
     else:
-        pte.field(53, 53, "pxn", 0)
         pte.field(54, 54, "xn", 0)
+        pte.field(53, 53, "pxn", 0)
     """
     Access rights
     """

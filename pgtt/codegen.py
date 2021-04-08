@@ -220,8 +220,8 @@ _tmp =f"""/*
     ret                             // done!
     ENDFUNC pagetable_init{args.label}  //
 
-    .section noinit.mmu,"aw",@nobits
-    .globl mmu_table
+    .section .noinit.mmu,"aw",@nobits
+    .globl {args.ttb}
     .align 12
 {args.ttb}: .space {hex(args.tg * len(table.Table._allocated))}
 """
