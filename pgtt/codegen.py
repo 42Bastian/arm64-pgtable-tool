@@ -60,13 +60,13 @@ def _mk_blocks( n:int, t:table.Table, index:int, r:Region ) -> str:
     MOV64   x10, {index}            // index: {index}
     MOV64   x11, {index + r.num_contig}     // to {index + r.num_contig} ({r.num_contig} entries)
     MOV64   x12, {hex(r.addr)}      // output address of entry[index]
-1:
+pt{hex(r.addr)}:
     orr     x12, x12, x9    // merge output address with template
     str     X12, [x21, x10, lsl #3]     // write entry into table
     add     x10, x10, #1                // prepare for next entry
     add     x12, x12, x22               // add chunk to address
     cmp     x10, x11            // last index?
-    b.ne    1b                      //
+    b.ne    pt{hex(r.addr)}                     //
 """
     else:
         return f"""
@@ -174,6 +174,33 @@ _tmp =f"""/*
  */
 
      /* some handy macros */
+#ifdef __IAR_SYSTEMS_ASM__
+FUNC64 MACRO
+    SECTION .text_\\1:CODE:NOROOT(3)
+    EXPORT  \\1
+\\1
+    ENDM
+
+ENDFUNC MACRO
+    ALIGNROM 3
+    LTORG
+\\1_size:    EQU . - \\1
+    ENDM
+
+    MOV64: MACRO   reg,value
+    movz    reg,#value & 0xffff
+    if (value > 0xffff) && (((value>>16) & 0xffff) != 0)
+    movk    reg,#(value>>16) & 0xffff,lsl #16
+    endif
+    if  (value > 0xffffffff) && (((value>>32) & 0xffff) != 0)
+    movk    reg,#(value>>32) & 0xffff,lsl #32
+    endif
+    if  (value > 0xffffffffffff) && (((value>>48) & 0xffff) != 0)
+    movk    reg,#(value>>48) & 0xffff,lsl #48
+    endif
+    ENDM
+#else
+#define END .end
     .macro  FUNC64 name
     .section .text.\\name,"ax"
     .type   \\name,%function
@@ -201,7 +228,7 @@ _tmp =f"""/*
     movk    \\reg,#(\\value>>48) & 0xffff,lsl #48
     .endif
     .endm
-
+#endif
 /**
  * Setup the page table.
  * Not reentrant!
@@ -211,19 +238,26 @@ _tmp =f"""/*
 /* zero_out_tables */
     mov     x2,x20 //
     MOV64   x3, {hex(args.tg * len(table.Table._allocated))}// combined length of all tables
-1:
+ptclear{args.label}:
     stp     xzr, xzr, [x2]       // zero out 2 table entries at a time
     subs    x3, x3, #16     //
     add     x2, x2, #16     //
-    b.ne    1b              //
+    b.ne    ptclear{args.label}            //
 {_mk_asm()}
     ret                             // done!
     ENDFUNC pagetable_init{args.label}  //
 
+#ifdef __IAR_SYSTEMS_ASM__
+    SECTION noinit_mmu:DATA
+    EXPORT {args.ttb}
+    ALIGNRAM 12
+{args.ttb}: DS8 {hex(args.tg * len(table.Table._allocated))}
+#else
     .section .noinit.mmu,"aw",@nobits
     .globl {args.ttb}
     .align 12
 {args.ttb}: .space {hex(args.tg * len(table.Table._allocated))}
+#endif
 """
 
 mmu_on = f"""
@@ -286,5 +320,5 @@ if not args.no_mmuon:
         elif not " *" and not "/*" and not "*/" in line:
             line = f"\t"+line.rstrip().lstrip()
         output += f"{line}\n"
-
+output += f"\tEND\n"
 [log.verbose(line) for line in output.splitlines()]
