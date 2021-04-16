@@ -81,8 +81,18 @@ class MemoryMap():
 
     def __init__( self, map_file:str ):
         self._ivtree = IntervalTree()
-        try:
-            with open(map_file, "r") as map_file_handle:
+
+        if map_file == "stdin" :
+                map_file_handle=sys.stdin
+        else:
+                try:
+                        map_file_handle= open(map_file, "r")
+
+                except OSError as e:
+                        log.error(f"failed to open map file: {e}")
+                        sys.exit(e.errno)
+
+        with map_file_handle:
                 map_file_lines = map_file_handle.readlines()
 
                 """
@@ -164,15 +174,14 @@ class MemoryMap():
                     Parse region length.
                     """
                     log.debug(f"parsing length: {length}")
-                    x = re.search(r"(\d+)([KMGT])", length)
+                    length1 = re.sub(r"(\d+)K","(\\1*1024)", length)
+                    length1 = re.sub(r"(\d+)M","(\\1*1024*1024)", length1)
+                    length1 = re.sub(r"(\d+)G","(\\1*1024*1024*1024)", length1)
+                    length1 = re.sub(r"(\d+)T","(\\1*1024*1024*1024*1024)", length1)
                     try:
-                        qty = x.group(1)
-                        log.debug(f"got qty: {qty}")
-                        unit = x.group(2)
-                        log.debug(f"got unit: {unit}")
-                    except AttributeError:
-                        abort_bad_region("length", length)
-                    length = int(qty) * 1024 ** ("KMGT".find(unit) + 1)
+                        length = eval(length1)
+                    except SyntaxError:
+                        abort_bad_region("length", length1)
 
                     """
                     Fudge region to be mappable at chosen granule size.
@@ -278,9 +287,6 @@ class MemoryMap():
                     self._ivtree.addi(virtaddr, virtaddr+length, r)
                     log.debug(f"added {r}")
 
-        except OSError as e:
-            log.error(f"failed to open map file: {e}")
-            sys.exit(e.errno)
 
 
     def regions( self ):

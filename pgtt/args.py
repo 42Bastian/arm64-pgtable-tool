@@ -17,9 +17,9 @@ _parser = argparse.ArgumentParser()
 _parser.add_argument(
     "-i",
     metavar="SRC",
-    help="input memory map file",
+    help="input memory map file (stdin if not set)",
     type=str,
-    required=True,
+    default="stdin"
 )
 
 _parser.add_argument(

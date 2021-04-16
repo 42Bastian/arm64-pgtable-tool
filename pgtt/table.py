@@ -64,7 +64,7 @@ class Table:
         Map a region of memory in this translation table.
         """
         log.debug()
-        log.debug(f"mapping region {hex(region.virtaddr)}->{hex(region.addr)} in level {self.level} table")
+        log.debug(f"mapping region {hex(region.virtaddr)}->{hex(region.addr)} in level {self.level} table {self.chunk}")
         log.debug(region)
         assert(region.virtaddr >= self.va_base)
         assert(region.virtaddr + region.length <= self.va_base + mmu.entries_per_table * self.chunk)
@@ -88,7 +88,7 @@ class Table:
                     +--------------------+
         """
         if num_chunks == 0:
-            log.debug(f"floating region, dispatching to next-level table")
+            log.debug(f"floating region, dispatching to next-level table at index {start_idx}")
             self.prepare_next(start_idx)
             self.entries[start_idx].map(region)
             return
@@ -109,11 +109,38 @@ class Table:
         """
         underflow = region.virtaddr % self.chunk
         if underflow:
-            log.debug(f"{underflow=}, dispatching to next-level table")
+            log.debug(f"{underflow=}, dispatching to next-level table at index {start_idx}")
             self.prepare_next(start_idx)
             self.entries[start_idx].map(region.copy(length=(self.chunk - underflow)))
             start_idx = start_idx + 1
+            region.length -= self.chunk - underflow
+            region.virtaddr += self.chunk - underflow
+            region.addr += self.chunk - underflow
+            log.debug(f"remaining: {region.length}")
 
+        """
+        Handle any remaining complete chunks.
+        """
+
+        blocks_allowed = self.level >= (1 if args.tg_str == "4K" else 2)
+        num_contiguous_blocks = 0
+        num_chunks = region.length // self.chunk
+        for i in range(start_idx, start_idx + num_chunks):
+            log.debug(f"mapping complete chunk at index {i} {hex(region.addr)}")
+            r = region.copy(virtaddr=region.virtaddr, addr=region.addr, length=self.chunk)
+            if not blocks_allowed:
+                self.prepare_next(i)
+                self.entries[i].map(r)
+            else:
+                self.entries[i] = r
+            num_contiguous_blocks += 1
+            region.addr += self.chunk
+            region.virtaddr += self.chunk
+            region.length -= self.chunk
+
+
+        self.entries[start_idx].num_contig = num_contiguous_blocks
+        start_idx += num_chunks;
         """
         Check for any "overflow".
         If so, dispatch the overflow to next-level table and proceed.
@@ -128,40 +155,16 @@ class Table:
                  \\ |####################|
                     +--------------------+
         """
-        overflow = (region.virtaddr + region.length) % self.chunk
+        overflow = region.length
         if overflow:
-            log.debug(f"{overflow=}, dispatching to next-level table")
-            final_idx = start_idx + num_chunks - (not not underflow)
-            va_base = ((region.virtaddr + region.length) // self.chunk) * self.chunk
-            paddr =  ((region.addr + region.length) // self.chunk) * self.chunk
+            log.debug(f"{overflow=}, dispatching to next-level table at index {start_idx}")
+            self.prepare_next(start_idx, region.virtaddr)
+            self.entries[start_idx].map(region.copy(addr=region.addr, virtaddr=region.virtaddr, length=overflow))
+            region.length -= overflow
 
-            self.prepare_next(final_idx, va_base)
-            self.entries[final_idx].map(region.copy(addr=paddr, virtaddr=va_base, length=overflow))
+        if region.length != 0:
+            log.error("Length error: {region.length}")
 
-        """
-        Handle any remaining complete chunks.
-        """
-        region.length = self.chunk
-        blocks_allowed = self.level >= (1 if args.tg_str == "4K" else 2)
-        if underflow + overflow == self.chunk:
-            num_chunks = num_chunks - 1
-        num_contiguous_blocks = 0
-
-        for i in range(start_idx, start_idx + num_chunks):
-            off_v=i*self.chunk;
-            off_p=(i-start_idx)*self.chunk;
-
-            log.debug(f"mapping complete chunk at index {i} {hex(region.addr+off_p)}")
-
-            r = region.copy(virtaddr=(self.va_base + off_v), addr=(region.addr + off_p))
-            if not blocks_allowed:
-                self.prepare_next(i)
-                self.entries[i].map(r)
-            else:
-                self.entries[i] = r
-            num_contiguous_blocks += 1
-        if num_contiguous_blocks > 0:
-            self.entries[start_idx].num_contig = num_contiguous_blocks
         log.debug("..")
 
     def __str__( self ) -> str:

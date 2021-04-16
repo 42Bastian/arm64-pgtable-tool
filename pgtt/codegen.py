@@ -187,16 +187,30 @@ ENDFUNC MACRO
 \\1_size:    EQU . - \\1
     ENDM
 
-    MOV64: MACRO   reg,value
+  MOV64:    MACRO   reg,value
+    if (value & 0xffff) || (value == 0)
     movz    reg,#value & 0xffff
-    if (value > 0xffff) && (((value>>16) & 0xffff) != 0)
+    endif
+    if value > 0xffff && ((value>>16) & 0xffff) != 0
+    if (value & 0xffff)
     movk    reg,#(value>>16) & 0xffff,lsl #16
+    else
+    movz    reg,#(value>>16) & 0xffff,lsl #16
     endif
-    if  (value > 0xffffffff) && (((value>>32) & 0xffff) != 0)
+    endif
+    if value > 0xffffffff && ((value>>32) & 0xffff) != 0
+    if value & 0xffffffff
     movk    reg,#(value>>32) & 0xffff,lsl #32
+    else
+    movz    reg,#(value>>32) & 0xffff,lsl #32
     endif
-    if  (value > 0xffffffffffff) && (((value>>48) & 0xffff) != 0)
+    endif
+    if value > 0xffffffffffff && ((value>>48) & 0xffff) != 0
+    if value & 0xffffffffffff
     movk    reg,#(value>>48) & 0xffff,lsl #48
+    else
+    movz    reg,#(value>>48) & 0xffff,lsl #48
+    endif
     endif
     ENDM
 #else
@@ -217,15 +231,29 @@ ENDFUNC MACRO
     .endm
 
     .macro  MOV64 reg,value
+    .if \\value & 0xffff || (\\value == 0)
     movz    \\reg,#\\value & 0xffff
+    .endif
     .if \\value > 0xffff && ((\\value>>16) & 0xffff) != 0
+    .if \\value & 0xffff
     movk    \\reg,#(\\value>>16) & 0xffff,lsl #16
+    .else
+    movz    \\reg,#(\\value>>16) & 0xffff,lsl #16
+    .endif
     .endif
     .if \\value > 0xffffffff && ((\\value>>32) & 0xffff) != 0
+    .if \\value & 0xffffffff
     movk    \\reg,#(\\value>>32) & 0xffff,lsl #32
+    .else
+    movz    \\reg,#(\\value>>32) & 0xffff,lsl #32
+    .endif
     .endif
     .if \\value > 0xffffffffffff && ((\\value>>48) & 0xffff) != 0
+    .if \\value & 0xffffffffffff
     movk    \\reg,#(\\value>>48) & 0xffff,lsl #48
+    .else
+    movz    \\reg,#(\\value>>48) & 0xffff,lsl #48
+    .endif
     .endif
     .endm
 #endif
