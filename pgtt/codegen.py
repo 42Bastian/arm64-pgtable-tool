@@ -171,6 +171,17 @@ _tmp =f"""/*
  *
  * The programmer must also ensure that the virtual memory region containing the
  * translation tables is itself marked as NORMAL in the memory map file.
+ * MAIR should be set like this:
+ *
+ * 0 = b00000000 = Device-nGnRnE
+ * 1 = b11111111 = Normal, Inner/Outer WB/WA/RA
+ * 2 = b01000100 = Normal, Inner/Outer Non-Cacheable
+ * 3 = b10111011 = Normal, Inner/Outer WT/WA/RA
+ *
+ * For example
+ *
+ *  MOV64   x1, 0xbb44ff00               // program mair on this CPU
+ *  msr     mair_el1, x1
  */
 
      /* some handy macros */
