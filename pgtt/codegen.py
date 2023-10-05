@@ -60,13 +60,13 @@ def _mk_blocks( n:int, t:table.Table, index:int, r:Region ) -> str:
     MOV64   x10, {index}            // index: {index}
     MOV64   x11, {index + r.num_contig}     // to {index + r.num_contig} ({r.num_contig} entries)
     MOV64   x12, {hex(r.addr)}      // output address of entry[index]
-pt{hex(r.addr)}:
+pt{hex(r.virtaddr)}:
     orr     x12, x12, x9    // merge output address with template
     str     X12, [x21, x10, lsl #3]     // write entry into table
     add     x10, x10, #1                // prepare for next entry
     add     x12, x12, x22               // add chunk to address
     cmp     x10, x11            // last index?
-    b.ne    pt{hex(r.addr)}                     //
+    b.ne    pt{hex(r.virtaddr)}                     //
 """
     else:
         return f"""
@@ -132,7 +132,7 @@ if args.ttbr1:
 _newline = "\n"
 _tmp =f"""/*
  * This file was automatically generated using arm64-pgtable-tool.
- * See: https://github.com/42Bastian Schick/arm64-pgtable-tool
+ * See: https://github.com/42Bastian/arm64-pgtable-tool
  * Forked from: https://github.com/ashwio/arm64-pgtable-tool
  *
  *
@@ -287,7 +287,7 @@ ptclear{args.label}:
     ENDFUNC pagetable_init{args.label}  //
 
 #ifdef __IAR_SYSTEMS_ASM__
-    SECTION noinit_mmu:DATA
+    SECTION noinit_mmu:DATA(12)
     EXPORT {args.ttb}
     ALIGNRAM 12
 {args.ttb}: DS8 {hex(args.tg * len(table.Table._allocated))}
